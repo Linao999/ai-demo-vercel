@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>智选 AI</title>
+<title>Demo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -44,34 +44,16 @@ body {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     padding: 0 24px;
-    height: 56px;
+    height: 48px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
     position: sticky;
     top: 0;
     z-index: 100;
     backdrop-filter: blur(20px);
     background: rgba(255,255,255,.82);
 }
-.header-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.logo {
-    width: 32px; height: 32px;
-    background: linear-gradient(135deg, #5e5ce6, #8b5cf6);
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    color: #fff; font-weight: 700; font-size: 16px;
-}
-.header h1 { font-size: 1rem; font-weight: 600; letter-spacing: -.01em; }
-.header .badge {
-    font-size: .7rem; padding: 3px 10px;
-    background: var(--accent-light); color: var(--accent);
-    border-radius: 20px; font-weight: 500;
-}
+.header h1 { font-size: .92rem; font-weight: 600; letter-spacing: -.01em; color: var(--text2); }
 
 /* Tabs */
 .tabs {
@@ -296,6 +278,10 @@ body {
 }
 .typing span:nth-child(2) { animation-delay: .2s; }
 .typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0; }
+}
 @keyframes typing {
     0%,60%,100% { opacity: .3; transform: scale(.85); }
     30% { opacity: 1; transform: scale(1); }
@@ -431,12 +417,7 @@ body {
 
 <!-- Header -->
 <div class="header">
-    <div class="header-left">
-        <div class="logo">Z</div>
-        <h1>智选 AI</h1>
-        <span class="badge">Beta</span>
-    </div>
-    <span style="font-size:.82rem;color:var(--text3);">Powered by DeepSeek</span>
+    <h1>Demo</h1>
 </div>
 
 <!-- Tabs -->
@@ -519,17 +500,42 @@ function switchTab(tab) {
 // ====== API ======
 const CS_SYSTEM = "你是「智选商城」的智能客服助手「小智」。回复要求：1）专业亲切，使用适当emoji；2）回复末尾用> 引用格式附带AI处理过程：📋 知识库命中、🎯 意图识别（置信度%）、😊 情绪分析；3）售后政策：7天无理由退货、15天质量问题换新、30天保修维修；4）遇到投诉主动安抚并判断是否转人工。";
 
-async function callAPI(messages, temp=0.7, maxTok=2048) {
+async function callAPIStream(messages, temp=0.7, maxTok=2048, onChunk) {
     try {
         const resp = await fetch('/api', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages, temperature: temp, max_tokens: maxTok })
+            body: JSON.stringify({ messages, temperature: temp, max_tokens: maxTok, stream: true })
         });
-        const data = await resp.json();
-        return data.content || '服务暂不可用，请稍后重试。';
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let full = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            full += chunk;
+            onChunk(chunk, full);
+        }
+        return full;
     } catch(e) {
-        return '网络连接异常，请检查网络后重试。';
+        // Fallback: non-streaming call
+        try {
+            const resp = await fetch('/api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages, temperature: temp, max_tokens: maxTok })
+            });
+            const data = await resp.json();
+            const content = data.content || '服务暂不可用';
+            onChunk(content, content);
+            return content;
+        } catch(e2) {
+            const err = '网络异常，请稍后重试。';
+            onChunk(err, err);
+            return err;
+        }
     }
 }
 
@@ -551,12 +557,18 @@ async function csSend() {
     appendBubble('user', msg);
     csHistory.push({ role: 'user', content: msg });
 
-    const typingEl = appendBubble('assistant', '<div class="typing"><span></span><span></span><span></span></div>');
+    const bubble = appendBubble('assistant', '<div class="typing"><span></span><span></span><span></span></div>');
     const msgs = [{ role: 'system', content: CS_SYSTEM }, ...csHistory];
-    const reply = await callAPI(msgs);
+    
+    let streamed = '';
+    const reply = await callAPIStream(msgs, 0.7, 2048, (chunk, full) => {
+        streamed = full;
+        // 实时渲染：对已收到的完整 markdown 块做渲染
+        bubble.innerHTML = marked.parse(streamed) + '<span class="typing-cursor" style="display:inline-block;width:2px;height:1em;background:var(--accent);margin-left:1px;animation:blink 1s infinite;vertical-align:text-bottom;"></span>';
+        document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+    });
 
-    typingEl.innerHTML = marked.parse(reply);
-    typingEl.style.animation = 'none';
+    bubble.innerHTML = marked.parse(reply);
     csHistory.push({ role: 'assistant', content: reply });
 }
 
@@ -599,15 +611,7 @@ async function travelPlan() {
     
     btn.disabled = true;
     btn.textContent = '⏳ 规划中…';
-    result.innerHTML = `
-        <div class="skeleton skeleton-line" style="width:40%"></div>
-        <div class="skeleton skeleton-line" style="width:60%"></div>
-        <div class="skeleton skeleton-line short"></div>
-        <div class="skeleton skeleton-block"></div>
-        <div class="skeleton skeleton-line" style="width:50%"></div>
-        <div class="skeleton skeleton-line short"></div>
-        <div class="skeleton skeleton-block"></div>
-    `;
+    result.innerHTML = '<div class="empty-state"><div style="font-size:2rem;margin-bottom:8px">✈️</div><p>正在生成个性化旅行方案…</p></div>';
 
     const prompt = `请为我规划一趟旅行：
 
@@ -638,7 +642,10 @@ async function travelPlan() {
         { role: 'system', content: '你是资深旅行规划师。回复用Markdown格式，具体到景点名称、时间、费用，实用可执行。避免泛泛而谈。' },
         { role: 'user', content: prompt }
     ];
-    const reply = await callAPI(msgs, 0.8, 3072);
+    
+    const reply = await callAPIStream(msgs, 0.8, 3072, (chunk, full) => {
+        result.innerHTML = marked.parse(full) + '<span style="display:inline-block;width:2px;height:1em;background:var(--accent);margin-left:2px;animation:blink 1s infinite;vertical-align:text-bottom;"></span>';
+    });
     result.innerHTML = marked.parse(reply);
     btn.disabled = false;
     btn.textContent = '🚀 生成旅行规划';
