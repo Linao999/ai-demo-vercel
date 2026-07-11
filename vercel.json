@@ -1,6 +1,5 @@
 {
-    "buildCommand": null,
-    "outputDirectory": null,
+    "framework": null,
     "functions": {
         "api/chat.py": {
             "memory": 512,
